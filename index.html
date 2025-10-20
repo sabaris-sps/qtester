@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Assignment Test - Vanilla JS</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { padding: 1.25rem; }
+    .question-img { width: 100%; height: auto; max-height: 78vh; object-fit: contain; border: 1px solid #ddd; border-radius: 6px; }
+    .sidebar { max-height: 70vh; overflow:auto; }
+    .timer { font-family: monospace; font-weight: 700; }
+    .marked-correct { border-left: 6px solid #198754; }
+    .marked-incorrect { border-left: 6px solid #dc3545; }
+    .marked-unsure { border-left: 6px solid #ffc107; }
+    /* hide scrollbars nicely when full-width view */
+    .no-side { padding-left: 0; padding-right: 0; }
+
+    /* Question palette (floating on the right) - expanded grid */
+    #qPalette {
+      position: fixed;
+      right: 12px;
+      top: 120px;
+      width: 220px; /* increased width to accommodate grid */
+      max-height: 78vh;
+      overflow:auto;
+      background: rgba(255,255,255,0.98);
+      border: 1px solid #e6e6e6;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+      border-radius: 8px;
+      padding: 8px;
+      z-index: 1050;
+    }
+    .palette-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; }
+    .palette-btn { display:block; width:100%; height:36px; border-radius:6px; text-align:center; line-height:36px; cursor:pointer; user-select:none; font-weight:600; }
+    .pal-unmarked { background:#f1f3f5; color:#333; }
+    .pal-correct { background:#198754; color:white; }
+    .pal-incorrect { background:#dc3545; color:white; }
+    .pal-unsure { background:#ffc107; color:#212529; }
+    .palette-title { font-size:12px; text-align:center; margin-bottom:6px; color:#555; }
+    @media (max-width: 1100px){ #qPalette { display:none; } }
+
+    /* when palette visible, give right margin so it doesn't overlap content */
+    .with-palette { margin-right: 240px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="mb-3">Local Assignment Test Platform</h1>
+    <div class="row g-3">
+      <div id="leftPanel" class="col-md-4">
+        <div class="card p-3">
+          <h5>Setup</h5>
+          <div class="mb-2">
+            <label class="form-label">Assignment folder name (relative to this HTML file)</label>
+            <input id="assignmentName" class="form-control" placeholder="e.g. assignment1">
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Number of questions (images named 1.png, 2.png ...)</label>
+            <input id="questionCount" type="number" class="form-control" value="5" min="1">
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Time (minutes)</label>
+            <input id="timeMinutes" type="number" class="form-control" value="30" min="1">
+          </div>
+          <div class="d-grid gap-2">
+            <button id="startBtn" class="btn btn-primary">Start Test</button>
+            <button id="viewAttemptsBtn" class="btn btn-outline-secondary">View Saved Attempts</button>
+          </div>
+          <hr>
+          <div class="d-flex gap-2">
+            <label class="btn btn-sm btn-outline-primary mb-0" id="importBtn">Import JSON</label>
+            <input type="file" id="importFile" accept="application/json" style="display:none">
+            <small class="text-muted align-self-center">or drop a JSON attempt</small>
+          </div>
+          <hr>
+          <small class="text-muted">Place a folder named like the assignment next to this HTML file. Put images as 1.png, 2.png, ...</small>
+        </div>
+
+        <div class="card mt-3 p-3 sidebar">
+          <h6>Attempts (local)</h6>
+          <div id="attemptList"></div>
+        </div>
+      </div>
+
+      <div id="rightPanel" class="col-md-8">
+        <div id="testArea" style="display:none;">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div>
+              <h4 id="testTitle"></h4>
+              <div>Started at: <span id="startedAt"></span></div>
+            </div>
+            <div class="text-end">
+              <div class="timer fs-3" id="timer">00:00:00</div>
+              <div class="mt-2">
+                <button id="submitBtn" class="btn btn-danger">Submit Test</button>
+                <button id="pauseBtn" class="btn btn-outline-secondary">Pause</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="questionContainer" class="mb-5"></div>
+        </div>
+
+        <div id="analysisArea" style="display:none;">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h4>Test Analysis</h4>
+            <div>
+              <button id="backToHomeBtn" class="btn btn-secondary">Back</button>
+              <button id="exportBtn" class="btn btn-outline-success">Export JSON</button>
+            </div>
+          </div>
+          <div id="analysisContent"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Question palette (grid of numbers) -->
+  <div id="qPalette" style="display:none;">
+    <div class="palette-title">Questions</div>
+    <div class="palette-grid" id="paletteGrid"></div>
+  </div>
+
+  <script>
+    // Simple local storage manager
+    const STORAGE_KEY = 'local_assignment_tests_v1';
+    function loadAll() { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : {}; }
+    function saveAll(obj) { localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); }
+
+    // UI elements
+    const assignmentNameEl = document.getElementById('assignmentName');
+    const questionCountEl = document.getElementById('questionCount');
+    const timeMinutesEl = document.getElementById('timeMinutes');
+    const startBtn = document.getElementById('startBtn');
+    const viewAttemptsBtn = document.getElementById('viewAttemptsBtn');
+    const attemptListEl = document.getElementById('attemptList');
+
+    const importBtn = document.getElementById('importBtn');
+    const importFile = document.getElementById('importFile');
+
+    const leftPanel = document.getElementById('leftPanel');
+    const rightPanel = document.getElementById('rightPanel');
+
+    const testArea = document.getElementById('testArea');
+    const testTitle = document.getElementById('testTitle');
+    const startedAtEl = document.getElementById('startedAt');
+    const timerEl = document.getElementById('timer');
+    const questionContainer = document.getElementById('questionContainer');
+    const submitBtn = document.getElementById('submitBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+
+    const analysisArea = document.getElementById('analysisArea');
+    const analysisContent = document.getElementById('analysisContent');
+    const backToHomeBtn = document.getElementById('backToHomeBtn');
+    const exportBtn = document.getElementById('exportBtn');
+
+    const qPalette = document.getElementById('qPalette');
+    const paletteGrid = document.getElementById('paletteGrid');
+
+    let timerInterval = null;
+    let remainingSeconds = 0;
+    let running = false;
+    let currentAttempt = null; // object
+
+    // import JSON file handling
+    importBtn.addEventListener('click', ()=> importFile.click());
+    importFile.addEventListener('change', async (e)=>{
+      const f = e.target.files[0]; if (!f) return; try { const text = await f.text(); handleImportedJson(text); } catch(err){ alert('Failed to read file'); }
+      importFile.value = '';
+    });
+
+    // allow drag and drop of JSON onto left panel
+    leftPanel.addEventListener('dragover', (e)=> { e.preventDefault(); leftPanel.classList.add('border-primary'); });
+    leftPanel.addEventListener('dragleave', (e)=> { leftPanel.classList.remove('border-primary'); });
+    leftPanel.addEventListener('drop', async (e)=>{
+      e.preventDefault(); leftPanel.classList.remove('border-primary');
+      const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (!f) return; if (!f.name.endsWith('.json')) return alert('Please drop a .json file');
+      try { const text = await f.text(); handleImportedJson(text); } catch(err){ alert('Failed to read file'); }
+    });
+
+    function handleImportedJson(text){
+      try {
+        const obj = JSON.parse(text);
+        // support either a single attempt or an array of attempts
+        const attempts = Array.isArray(obj) ? obj : [obj];
+        const all = loadAll();
+        let imported = 0;
+        attempts.forEach(attempt=>{
+          if (!attempt.assignment) attempt.assignment = attempt.assignment || 'imported_assignment';
+          if (!attempt.id) attempt.id = 'imp_' + Date.now() + '_' + Math.floor(Math.random()*1000);
+          if (!attempt.answers || !Array.isArray(attempt.answers)) attempt.answers = [];
+          if (!all[attempt.assignment]) all[attempt.assignment] = [];
+          all[attempt.assignment].push(attempt); imported++;
+        });
+        saveAll(all);
+        renderAttemptList();
+        alert(`Imported ${imported} attempt(s).`);
+      } catch(e){ console.error(e); alert('Invalid JSON file'); }
+    }
+
+    function renderAttemptList() {
+      const all = loadAll();
+      attemptListEl.innerHTML = '';
+      const assignments = Object.keys(all).sort();
+      if (!assignments.length) { attemptListEl.innerHTML = '<div class="text-muted">No attempts saved yet.</div>'; return; }
+      assignments.forEach(assn => {
+        const card = document.createElement('div'); card.className = 'card mb-2 p-2';
+        const header = document.createElement('div'); header.className = 'd-flex justify-content-between align-items-center'; header.innerHTML = `<strong>${assn}</strong>`; card.appendChild(header);
+        const list = document.createElement('div');
+        (all[assn] || []).slice().reverse().forEach(attempt => {
+          const row = document.createElement('div'); row.className = 'd-flex justify-content-between align-items-center py-1';
+          row.innerHTML = `<div><small>${new Date(attempt.startedAt).toLocaleString()}</small><br><small class="text-muted">Duration: ${formatDuration(attempt.durationSeconds)}</small></div>`;
+          const btns = document.createElement('div');
+          const viewBtn = document.createElement('button'); viewBtn.className = 'btn btn-sm btn-outline-primary me-1'; viewBtn.innerText = 'View'; viewBtn.addEventListener('click', ()=> openAnalysis(assn, attempt.id)); btns.appendChild(viewBtn);
+          const delBtn = document.createElement('button'); delBtn.className = 'btn btn-sm btn-outline-danger'; delBtn.innerText = 'Delete'; delBtn.addEventListener('click', ()=> deleteAttempt(assn, attempt.id)); btns.appendChild(delBtn);
+          row.appendChild(btns); list.appendChild(row);
+        }); card.appendChild(list); attemptListEl.appendChild(card);
+      });
+    }
+
+    function deleteAttempt(assn, id) { if (!confirm('Delete this attempt?')) return; const all = loadAll(); all[assn] = (all[assn] || []).filter(a => a.id !== id); if (!all[assn].length) delete all[assn]; saveAll(all); renderAttemptList(); }
+
+    function formatDuration(sec) { const h = Math.floor(sec/3600); const m = Math.floor((sec%3600)/60); const s = sec%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; }
+
+    // Palette rendering and updates (grid, 4 per row)
+    function renderPalette(total, answers){
+      paletteGrid.innerHTML = '';
+      if (!total) { qPalette.style.display = 'none'; rightPanel.classList.remove('with-palette'); return; }
+      for (let i=0;i<total;i++){
+        const num = i+1;
+        const btn = document.createElement('div');
+        btn.className = 'palette-btn pal-unmarked';
+        btn.dataset.q = i;
+        btn.innerText = num;
+        btn.addEventListener('click', ()=> scrollToQuestion(i));
+        paletteGrid.appendChild(btn);
+      }
+      if (answers) updatePaletteStatus(answers);
+      qPalette.style.display = '';
+      rightPanel.classList.add('with-palette');
+    }
+
+    function updatePaletteStatus(answers){
+      const btns = paletteGrid.querySelectorAll('.palette-btn');
+      btns.forEach(b=>{
+        const idx = parseInt(b.dataset.q,10);
+        const mark = answers && answers[idx] ? (answers[idx].mark || 'unmarked') : 'unmarked';
+        b.classList.remove('pal-unmarked','pal-correct','pal-incorrect','pal-unsure');
+        if (mark === 'correct') b.classList.add('pal-correct');
+        else if (mark === 'incorrect') b.classList.add('pal-incorrect');
+        else if (mark === 'unsure') b.classList.add('pal-unsure');
+        else b.classList.add('pal-unmarked');
+      });
+    }
+
+    function scrollToQuestion(idx){
+      const qcard = document.getElementById('qcard_'+(idx+1)) || document.getElementById('qcard_analysis_'+(idx+1));
+      if (!qcard) return;
+      qcard.scrollIntoView({behavior:'smooth', block:'center'});
+      // highlight briefly
+      qcard.style.transition = 'box-shadow 0.3s';
+      const old = qcard.style.boxShadow;
+      qcard.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
+      setTimeout(()=> qcard.style.boxShadow = old, 800);
+    }
+
+    function startTest() {
+      const assn = (assignmentNameEl.value || '').trim();
+      const qcount = parseInt(questionCountEl.value,10);
+      const minutes = parseInt(timeMinutesEl.value,10);
+      if (!assn) { alert('Provide assignment folder name'); return; }
+      if (!qcount || qcount < 1) { alert('Provide valid question count'); return; }
+      if (!minutes || minutes < 1) { alert('Provide valid time'); return; }
+
+      const attempt = { id: 'a_' + Date.now(), assignment: assn, questionCount: qcount, startedAt: new Date().toISOString(), durationSeconds: minutes*60, answers: Array.from({length:qcount}, (_,i)=>({ q: i+1, note: '', mark: 'unmarked', timeStartedAt: null, timeEndedAt: null })), metadata: {}, finishedAt: null };
+      currentAttempt = attempt;
+
+      // full-width layout
+      leftPanel.style.display = 'none'; rightPanel.classList.remove('col-md-8'); rightPanel.classList.add('col-md-12'); document.querySelector('.container').classList.add('no-side');
+
+      document.getElementById('testTitle').innerText = `Assignment: ${assn}`;
+      document.getElementById('startedAt').innerText = new Date(attempt.startedAt).toLocaleString();
+      questionContainer.innerHTML = '';
+
+      for (let i=0;i<qcount;i++){
+        const qnum = i+1;
+        const card = document.createElement('div'); card.className = 'card mb-3 p-3'; card.id = 'qcard_'+qnum;
+        card.innerHTML = `
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <div><h5>Q${qnum}</h5></div>
+            <div>
+              <select class="form-select form-select-sm mark-select" data-q="${i}">
+                <option value="unmarked">Unmarked</option>
+                <option value="correct">Correct</option>
+                <option value="incorrect">Incorrect</option>
+                <option value="unsure">Unsure</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-12">
+              <img class="question-img" src="${assn}/${qnum}.png" onerror="this.style.opacity=0.6; this.alt='Image not found: ${assn}/${qnum}.png'"> 
+            </div>
+            <div class="col-12 mt-3">
+              <label class="form-label">Notes / Answer (no auto-marking)</label>
+              <textarea class="form-control note-input" rows="6" data-q="${i}"></textarea>
+              <div class="mt-2 d-flex justify-content-between">
+                <small class="text-muted">Mark while doing test to remember your decision.</small>
+                <small><button class="btn btn-sm btn-outline-light" onclick="scrollToTop()">Top</button></small>
+              </div>
+            </div>
+          </div>
+        `;
+        questionContainer.appendChild(card);
+      }
+
+      // show palette
+      renderPalette(qcount, currentAttempt.answers);
+
+      testArea.style.display = ''; analysisArea.style.display = 'none';
+
+      remainingSeconds = attempt.durationSeconds; updateTimerDisplay(); startTimer();
+
+      // event wiring
+      document.querySelectorAll('.note-input').forEach(el=>{ el.addEventListener('input', (e)=> { const idx = parseInt(e.target.dataset.q,10); currentAttempt.answers[idx].note = e.target.value; autosaveCurrent(); }); el.addEventListener('focus', (e)=> { const idx = parseInt(e.target.dataset.q,10); if (!currentAttempt.answers[idx].timeStartedAt) currentAttempt.answers[idx].timeStartedAt = new Date().toISOString(); }); });
+
+      document.querySelectorAll('.mark-select').forEach(sel=>{ sel.addEventListener('change', (e)=>{ const idx = parseInt(e.target.dataset.q,10); const val = e.target.value; currentAttempt.answers[idx].mark = val; const qcard = document.getElementById('qcard_'+(idx+1)); qcard.classList.remove('marked-correct','marked-incorrect','marked-unsure'); if (val==='correct') qcard.classList.add('marked-correct'); if (val==='incorrect') qcard.classList.add('marked-incorrect'); if (val==='unsure') qcard.classList.add('marked-unsure'); updatePaletteStatus(currentAttempt.answers); autosaveCurrent(); }); });
+
+      submitBtn.onclick = ()=> { if (!confirm('Submit test now?')) return; finishAttempt(false); };
+      pauseBtn.onclick = ()=> togglePause();
+
+      if (window.autosaveInterval) clearInterval(window.autosaveInterval);
+      window.autosaveInterval = setInterval(()=> autosaveCurrent(), 10000);
+
+      setTimeout(()=>{ const first = document.querySelector('.note-input'); if (first) first.focus(); },200);
+    }
+
+    function restoreLayout() { leftPanel.style.display = ''; rightPanel.classList.remove('col-md-12'); rightPanel.classList.add('col-md-8'); document.querySelector('.container').classList.remove('no-side'); qPalette.style.display = 'none'; rightPanel.classList.remove('with-palette'); }
+
+    function startTimer(){ running = true; if (timerInterval) clearInterval(timerInterval); timerInterval = setInterval(()=>{ if (!running) return; if (remainingSeconds <= 0) { clearInterval(timerInterval); finishAttempt(true); return; } remainingSeconds -= 1; updateTimerDisplay(); },1000); }
+    function togglePause(){ running = !running; pauseBtn.innerText = running? 'Pause' : 'Resume'; }
+    function updateTimerDisplay(){ timerEl.innerText = formatDuration(remainingSeconds); }
+
+    function autosaveCurrent(){ if (!currentAttempt) return; const now = new Date().toISOString(); document.querySelectorAll('.note-input').forEach(el=>{ const idx = parseInt(el.dataset.q,10); if (el === document.activeElement) return; if (!currentAttempt.answers[idx].timeStartedAt && el.value.trim()) currentAttempt.answers[idx].timeStartedAt = now; if (el.value.trim() && !currentAttempt.answers[idx].timeEndedAt) currentAttempt.answers[idx].timeEndedAt = now; }); const tmpKey = 'tmp_' + currentAttempt.id; localStorage.setItem(tmpKey, JSON.stringify({attempt: currentAttempt, remainingSeconds})); }
+
+    function finishAttempt(autosubmitted=false){ const now = new Date().toISOString(); currentAttempt.finishedAt = now; currentAttempt.completedByAuto = !!autosubmitted; const used = currentAttempt.durationSeconds - remainingSeconds; currentAttempt.usedSeconds = used; currentAttempt.answers.forEach((a,idx)=>{ if (!a.timeStartedAt && a.note && a.note.trim()) a.timeStartedAt = currentAttempt.startedAt; if (!a.timeEndedAt && a.note && a.note.trim()) a.timeEndedAt = now; }); const all = loadAll(); if (!all[currentAttempt.assignment]) all[currentAttempt.assignment] = []; all[currentAttempt.assignment].push(currentAttempt); saveAll(all); localStorage.removeItem('tmp_' + currentAttempt.id); if (window.autosaveInterval) { clearInterval(window.autosaveInterval); window.autosaveInterval = null; } if (timerInterval) { clearInterval(timerInterval); timerInterval = null; } running = false; openAnalysis(currentAttempt.assignment, currentAttempt.id); renderAttemptList(); currentAttempt = null; testArea.style.display = 'none'; restoreLayout(); }
+
+    function openAnalysis(assignment, id){ const all = loadAll(); const attempts = all[assignment] || []; const attempt = attempts.find(a=>a.id===id); if (!attempt) { alert('Attempt not found'); return; } analysisArea.style.display = ''; testArea.style.display = 'none'; assignmentNameEl.value = assignment; analysisContent.innerHTML = ''; const meta = document.createElement('div'); meta.className = 'mb-3'; meta.innerHTML = `<strong>${assignment}</strong> — Started: ${new Date(attempt.startedAt).toLocaleString()} — Duration: ${formatDuration(attempt.durationSeconds)} — Used: ${formatDuration(attempt.usedSeconds||0)} <br> Finished: ${attempt.finishedAt? new Date(attempt.finishedAt).toLocaleString() : 'N/A'} ${attempt.completedByAuto? '<span class="badge bg-warning text-dark">Autosubmitted</span>':''}`; analysisContent.appendChild(meta);
+
+      // show palette for analysis too
+      renderPalette(attempt.answers.length, attempt.answers);
+
+      attempt.answers.forEach((a, idx)=>{
+        const card = document.createElement('div'); card.className = 'card mb-3 p-3'; card.id = 'qcard_analysis_'+(idx+1);
+        card.innerHTML = `
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <div><h6>Q${a.q} — ${a.mark}</h6><small class="text-muted">Started: ${a.timeStartedAt? new Date(a.timeStartedAt).toLocaleString(): '—'} — Ended: ${a.timeEndedAt? new Date(a.timeEndedAt).toLocaleString(): '—'}</small></div>
+          </div>
+          <div class="row">
+            <div class="col-12">
+              <img class="question-img" src="${assignment}/${a.q}.png" onerror="this.style.opacity=0.6; this.alt='Image not found'>">
+            </div>
+            <div class="col-12 mt-3">
+              <label class="form-label">Your note/answer</label>
+              <pre class="border rounded p-2" style="white-space:pre-wrap;">${escapeHtml(a.note || '')}</pre>
+            </div>
+          </div>
+        `; analysisContent.appendChild(card);
+      });
+
+      exportBtn.onclick = ()=>{ const blob = new Blob([JSON.stringify(attempt, null, 2)], {type:'application/json'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${assignment}_${attempt.id}.json`; a.click(); URL.revokeObjectURL(url); };
+
+      backToHomeBtn.onclick = ()=>{ analysisArea.style.display = 'none'; testArea.style.display = 'none'; qPalette.style.display = 'none'; rightPanel.classList.remove('with-palette'); };
+    }
+
+    function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function scrollToTop(){ window.scrollTo({top:0, behavior:'smooth'}); }
+
+    // Restore any temporary attempt on page load
+    function tryRestoreTmp(){ const allKeys = Object.keys(localStorage).filter(k=>k.startsWith('tmp_')); if (!allKeys.length) return; const latestKey = allKeys.sort().reverse()[0]; try { const obj = JSON.parse(localStorage.getItem(latestKey)); if (!obj || !obj.attempt) return; if (!confirm('Found an unfinished test. Resume?')) { localStorage.removeItem(latestKey); return; } currentAttempt = obj.attempt; remainingSeconds = obj.remainingSeconds || currentAttempt.durationSeconds; leftPanel.style.display = 'none'; rightPanel.classList.remove('col-md-8'); rightPanel.classList.add('col-md-12'); document.querySelector('.container').classList.add('no-side'); document.getElementById('testTitle').innerText = `Assignment: ${currentAttempt.assignment}`; document.getElementById('startedAt').innerText = new Date(currentAttempt.startedAt).toLocaleString(); questionContainer.innerHTML = ''; for (let i=0;i<currentAttempt.questionCount;i++){ const qnum = i+1; const card = document.createElement('div'); card.className = 'card mb-3 p-3'; card.id = 'qcard_'+qnum; card.innerHTML = `
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <div><h5>Q${qnum}</h5></div>
+              <div>
+                <select class="form-select form-select-sm mark-select" data-q="${i}">
+                  <option value="unmarked">Unmarked</option>
+                  <option value="correct">Correct</option>
+                  <option value="incorrect">Incorrect</option>
+                  <option value="unsure">Unsure</option>
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-12">
+                <img class="question-img" src="${currentAttempt.assignment}/${qnum}.png" onerror="this.style.opacity=0.6; this.alt='Image not found: ${currentAttempt.assignment}/${qnum}.png'"> 
+              </div>
+              <div class="col-12 mt-3">
+                <label class="form-label">Notes / Answer (no auto-marking)</label>
+                <textarea class="form-control note-input" rows="6" data-q="${i}"></textarea>
+                <div class="mt-2 d-flex justify-content-between">
+                  <small class="text-muted">Mark while doing test to remember your decision.</small>
+                  <small><button class="btn btn-sm btn-outline-light" onclick="scrollToTop()">Top</button></small>
+                </div>
+              </div>
+            </div>
+          `; questionContainer.appendChild(card); }
+        testArea.style.display = ''; analysisArea.style.display = 'none'; currentAttempt.answers.forEach((a,idx)=>{ const ta = document.querySelector(`.note-input[data-q='${idx}']`); if (ta) ta.value = a.note || ''; const sel = document.querySelector(`.mark-select[data-q='${idx}']`); if (sel) sel.value = a.mark || 'unmarked'; const qcard = document.getElementById('qcard_'+(idx+1)); qcard.classList.remove('marked-correct','marked-incorrect','marked-unsure'); if (a.mark==='correct') qcard.classList.add('marked-correct'); if (a.mark==='incorrect') qcard.classList.add('marked-incorrect'); if (a.mark==='unsure') qcard.classList.add('marked-unsure'); }); renderPalette(currentAttempt.questionCount, currentAttempt.answers);
+
+        document.querySelectorAll('.note-input').forEach(el=>{ el.addEventListener('input', (e)=> { const idx = parseInt(e.target.dataset.q,10); currentAttempt.answers[idx].note = e.target.value; autosaveCurrent(); }); el.addEventListener('focus', (e)=> { const idx = parseInt(e.target.dataset.q,10); if (!currentAttempt.answers[idx].timeStartedAt) currentAttempt.answers[idx].timeStartedAt = new Date().toISOString(); }); });
+        document.querySelectorAll('.mark-select').forEach(sel=>{ sel.addEventListener('change', (e)=>{ const idx = parseInt(e.target.dataset.q,10); const val = e.target.value; currentAttempt.answers[idx].mark = val; const qcard = document.getElementById('qcard_'+(idx+1)); qcard.classList.remove('marked-correct','marked-incorrect','marked-unsure'); if (val==='correct') qcard.classList.add('marked-correct'); if (val==='incorrect') qcard.classList.add('marked-incorrect'); if (val==='unsure') qcard.classList.add('marked-unsure'); updatePaletteStatus(currentAttempt.answers); autosaveCurrent(); }); });
+
+        submitBtn.onclick = ()=> { if (!confirm('Submit test now?')) return; finishAttempt(false); };
+        pauseBtn.onclick = ()=> togglePause();
+        if (window.autosaveInterval) clearInterval(window.autosaveInterval);
+        window.autosaveInterval = setInterval(()=> autosaveCurrent(), 10000);
+        startTimer();
+      } catch(e){ console.error(e); }
+    }
+
+    // wire up events
+    startBtn.addEventListener('click', startTest);
+    viewAttemptsBtn.addEventListener('click', renderAttemptList);
+
+    // initial render
+    renderAttemptList();
+    tryRestoreTmp();
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
